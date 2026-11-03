@@ -4,8 +4,6 @@ import type { ElkInput } from "./elk-layout";
 
 export const NODE_WIDTH = 280;
 export const NODE_HEIGHT = 120;
-export const LAYER_CLUSTER_WIDTH = 320;
-export const LAYER_CLUSTER_HEIGHT = 180;
 export const PORTAL_NODE_WIDTH = 240;
 export const PORTAL_NODE_HEIGHT = 80;
 
@@ -142,5 +140,22 @@ export function mergeElkPositions<T extends Node>(
       ...(merged.width != null ? { width: merged.width } : {}),
       ...(merged.height != null ? { height: merged.height } : {}),
     };
+  });
+}
+
+/**
+ * Copy React Flow's `measured` size from the nodes currently on screen onto
+ * freshly built node objects with the same id.
+ *
+ * React Flow drops a node's handle bounds when it receives a node object
+ * without `measured`, and edges attached to it stop rendering until the node
+ * happens to be re-measured. Rebuilding nodes (hover, search, selection) must
+ * therefore carry the measurement over.
+ */
+export function carryOverMeasurements<T extends Node>(previous: Node[], next: T[]): T[] {
+  const measured = new Map(previous.map((n) => [n.id, n.measured]));
+  return next.map((n) => {
+    const m = measured.get(n.id);
+    return m && !n.measured ? { ...n, measured: m } : n;
   });
 }
