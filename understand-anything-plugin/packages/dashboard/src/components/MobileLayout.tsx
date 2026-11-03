@@ -8,6 +8,7 @@ import KnowledgeGraphView from "./KnowledgeGraphView";
 import SearchBar from "./SearchBar";
 import NodeInfo from "./NodeInfo";
 import ProjectOverview from "./ProjectOverview";
+import LayerInfo from "./LayerInfo";
 import FileExplorer from "./FileExplorer";
 import WarningBanner from "./WarningBanner";
 import StalenessBanner from "./StalenessBanner";
@@ -42,6 +43,9 @@ export default function MobileLayout({
 }: Props) {
   const graph = useDashboardStore((s) => s.graph);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
+  const selectedLayerId = useDashboardStore((s) => s.selectedLayerId);
+  const navigationLevel = useDashboardStore((s) => s.navigationLevel);
+  const activeLayerId = useDashboardStore((s) => s.activeLayerId);
   const tourActive = useDashboardStore((s) => s.tourActive);
   const persona = useDashboardStore((s) => s.persona);
   const viewMode = useDashboardStore((s) => s.viewMode);
@@ -56,11 +60,18 @@ export default function MobileLayout({
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
 
-  // Auto-pivot to Info when a node is selected — keeps feedback visible
-  // on a small screen where graph and sidebar can't coexist
+  // Opening a layer (e.g. from the layer panel) brings the graph back.
+  // Declared before the Info pivot so a node selection made in the same
+  // update still wins.
   useEffect(() => {
-    if (selectedNodeId) setActiveTab("info");
-  }, [selectedNodeId]);
+    if (activeLayerId) setActiveTab("graph");
+  }, [activeLayerId]);
+
+  // Auto-pivot to Info when a node or overview layer is selected — keeps
+  // feedback visible on a small screen where graph and sidebar can't coexist
+  useEffect(() => {
+    if (selectedNodeId || selectedLayerId) setActiveTab("info");
+  }, [selectedNodeId, selectedLayerId]);
 
   // When a code viewer opens (e.g. from the Files tab) keep focus there
   useEffect(() => {
@@ -68,15 +79,17 @@ export default function MobileLayout({
   }, [codeViewerOpen]);
 
   const isLearnMode = tourActive || persona === "junior";
+  const showLayerInfo = !selectedNodeId && navigationLevel === "overview" && !!selectedLayerId;
   const infoContent = (
     <>
       {selectedNodeId && <NodeInfo />}
+      {showLayerInfo && <LayerInfo />}
       {isLearnMode && (
         <Suspense fallback={null}>
           <LearnPanel />
         </Suspense>
       )}
-      {!selectedNodeId && !isLearnMode && <ProjectOverview />}
+      {!selectedNodeId && !showLayerInfo && !isLearnMode && <ProjectOverview />}
     </>
   );
 

@@ -1,6 +1,9 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useDashboardStore } from "../store";
 import { useI18n } from "../contexts/I18nContext";
+import DependencyList from "./DependencyList";
+import { useLayerOverview } from "../hooks/useLayerOverview";
+import { buildOwnerIndex, collectDependencies, withContainedNodes } from "../utils/layerGraph";
 import type { NodeType, EdgeType, KnowledgeGraph, GraphNode } from "@understand-anything/core/types";
 
 // Badge color classes keyed by NodeType — must be kept in sync with core NodeType union.
@@ -293,6 +296,17 @@ export default function NodeInfo() {
 
   const activeGraph = viewMode === "domain" && domainGraph ? domainGraph : graph;
   const node = activeGraph?.nodes.find((n) => n.id === selectedNodeId) ?? null;
+  const layerModel = useLayerOverview();
+
+  // Layer-grouped "uses / used by" for nodes of the structural graph. A file
+  // brings its functions along, so function-level calls count for the file.
+  const dependencies = useMemo(() => {
+    if (!graph || !node || activeGraph !== graph || !layerModel) return null;
+    const { unitOf } = buildOwnerIndex(graph);
+    if (!unitOf.has(node.id)) return null;
+    const members = unitOf.get(node.id) === node.id ? withContainedNodes(graph, [node.id]) : new Set([node.id]);
+    return collectDependencies(graph, members, layerModel.edgeTypes);
+  }, [graph, activeGraph, node, layerModel]);
 
   // Resolve history node names for the breadcrumb trail
   const historyNodes = nodeHistory.map((id) => {
@@ -484,6 +498,13 @@ export default function NodeInfo() {
         <DomainNodeDetails node={node} graph={activeGraph} />
       )}
 
+      {dependencies && (
+        <>
+          <DependencyList key={`uses:${node.id}`} title={t.layerOverview.uses} groups={dependencies.uses} defaultOpen={dependencies.uses.length <= 3} />
+          <DependencyList key={`usedBy:${node.id}`} title={t.layerOverview.usedBy} groups={dependencies.usedBy} defaultOpen={dependencies.usedBy.length <= 3} />
+        </>
+      )}
+
       {/* Child classes/functions within this file */}
       {childNodes.length > 0 && (
         <div className="mb-4">
@@ -511,7 +532,7 @@ export default function NodeInfo() {
                     </span>
                   </div>
                   {child.summary && (
-                    <p className="text-[11px] text-text-muted mt-1 line-clamp-1 pl-1">
+                    <p className="text-[11px] text-text-muted mt-1 line-clamp-2 pl-1">
                       {child.summary}
                     </p>
                   )}
@@ -522,12 +543,14 @@ export default function NodeInfo() {
         </div>
       )}
 
-      {/* Other connections (excluding "contains" children) */}
+      {/* Other connections (excluding "contains" children); folded away when
+          the grouped dependency lists above already tell the story. */}
       {otherConnections.length > 0 && (
-        <div>
-          <h3 className="text-[11px] font-semibold text-gold uppercase tracking-wider mb-2">
-            {t.common.connections} ({otherConnections.length})
-          </h3>
+        <details open={!dependencies} className="group/connections">
+          <summary className="text-[11px] font-semibold text-gold uppercase tracking-wider mb-2 cursor-pointer select-none list-none flex items-center gap-1.5">
+            <span className="text-text-muted transition-transform group-open/connections:rotate-90">›</span>
+            {dependencies ? t.layerOverview.allConnections : t.common.connections} ({otherConnections.length})
+          </summary>
           <div className="space-y-1.5">
             {otherConnections.map((edge, i) => {
               const isSource = edge.source === node.id;
@@ -553,7 +576,7 @@ export default function NodeInfo() {
               );
             })}
           </div>
-        </div>
+        </details>
       )}
     </div>
   );

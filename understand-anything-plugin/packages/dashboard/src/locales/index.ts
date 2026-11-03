@@ -36,3 +36,10 @@ export function resolveLocaleKey(lang: string | undefined): LocaleKey {
 }
 
 export { en, zh, zhTW as "zh-TW", ja, ko, ru, vi };
+
+/** Fill `{name}` placeholders in a locale string. */
+export function formatMessage(template: string, values: Record<string, string | number>): string {
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in values ? String(values[name]) : match,
+  );
+}

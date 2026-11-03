@@ -17,7 +17,9 @@ import "@xyflow/react/dist/style.css";
 import CustomNode from "./CustomNode";
 import type { CustomFlowNode } from "./CustomNode";
 import LayerClusterNode from "./LayerClusterNode";
-import type { LayerClusterFlowNode } from "./LayerClusterNode";
+import LayerFoundationNode from "./LayerFoundationNode";
+import LayerLinkEdge from "./LayerLinkEdge";
+import OverviewControls from "./OverviewControls";
 import PortalNode from "./PortalNode";
 import type { PortalFlowNode } from "./PortalNode";
 import ContainerNode from "./ContainerNode";
@@ -34,31 +36,33 @@ import { useTheme } from "../themes/index.ts";
 import {
   NODE_WIDTH,
   NODE_HEIGHT,
-  LAYER_CLUSTER_WIDTH,
-  LAYER_CLUSTER_HEIGHT,
   PORTAL_NODE_WIDTH,
   PORTAL_NODE_HEIGHT,
   ELK_DEFAULT_LAYOUT_OPTIONS,
-  nodesToElkInput,
+  carryOverMeasurements,
   mergeElkPositions,
 } from "../utils/layout";
 import { applyElkLayout } from "../utils/elk-layout";
 import type { ElkChild, ElkEdge, ElkInput } from "../utils/elk-layout";
 import {
   aggregateContainerEdges,
-  aggregateLayerEdges,
   computePortals,
   findCrossLayerFileNodes,
 } from "../utils/edgeAggregation";
 import { deriveContainers } from "../utils/containers";
 import type { DerivedContainer } from "../utils/containers";
-import { computeLayerStats } from "../utils/layerStats";
+import { useOverviewGraph } from "../hooks/useOverviewGraph";
 
 const nodeTypes = {
   custom: CustomNode,
   "layer-cluster": LayerClusterNode,
+  "layer-foundation": LayerFoundationNode,
   portal: PortalNode,
   container: ContainerNode,
+};
+
+const edgeTypes = {
+  "layer-link": LayerLinkEdge,
 };
 
 import type { NodeCategory } from "../store";
@@ -234,127 +238,14 @@ function SelectedNodeFitView() {
   return null;
 }
 
-// ── Overview level: layers as cluster nodes ────────────────────────────
+// ── Overview level: layers in dependency tiers (see useOverviewGraph) ──
 
-function useOverviewGraph() {
-  const graph = useDashboardStore((s) => s.graph);
-  const nodesById = useDashboardStore((s) => s.nodesById);
-  const nodeIdToLayerId = useDashboardStore((s) => s.nodeIdToLayerId);
-  const searchResults = useDashboardStore((s) => s.searchResults);
-  const drillIntoLayer = useDashboardStore((s) => s.drillIntoLayer);
-
-  // Build cluster nodes / flow edges / dims synchronously; only the layout
-  // call itself is async, so we memo the structural pieces and run ELK in an
-  // effect.
-  const built = useMemo(() => {
-    if (!graph) {
-      return null;
-    }
-    const layers = graph.layers ?? [];
-    if (layers.length === 0) {
-      return null;
-    }
-
-    // Build search match counts per layer using the precomputed
-    // nodeIdToLayerId index. Reusing the store-level index avoids an extra
-    // O(N) pass when search results change frequently.
-    const searchMatchByLayer = new Map<string, number>();
-    if (searchResults.length > 0) {
-      for (const result of searchResults) {
-        const lid = nodeIdToLayerId.get(result.nodeId);
-        if (lid) {
-          searchMatchByLayer.set(lid, (searchMatchByLayer.get(lid) ?? 0) + 1);
-        }
-      }
-    }
-
-    // Create cluster nodes. Per-layer aggregation goes through
-    // `computeLayerStats`, which iterates `layer.nodeIds` against the
-    // `nodesById` index — O(K) per layer instead of the previous
-    // O(N) Array.filter that ran `layer.nodeIds.includes(n.id)` (#102).
-    const clusterNodes: LayerClusterFlowNode[] = layers.map((layer, i) => {
-      const { aggregateComplexity } = computeLayerStats(layer, nodesById);
-
-      return {
-        id: layer.id,
-        type: "layer-cluster" as const,
-        position: { x: 0, y: 0 },
-        data: {
-          layerId: layer.id,
-          layerName: layer.name,
-          layerDescription: layer.description,
-          fileCount: layer.nodeIds.length,
-          aggregateComplexity,
-          layerColorIndex: i,
-          searchMatchCount: searchMatchByLayer.get(layer.id),
-          onDrillIn: drillIntoLayer,
-        },
-      };
-    });
-
-    // Aggregate edges between layers
-    const aggregated = aggregateLayerEdges(graph);
-    const flowEdges: Edge[] = aggregated.map((agg, i) => ({
-      id: `le-${i}`,
-      source: agg.sourceLayerId,
-      target: agg.targetLayerId,
-      label: `${agg.count}`,
-      style: {
-        stroke: "rgba(212,165,116,0.4)",
-        strokeWidth: Math.min(1 + Math.log2(agg.count + 1), 5),
-      },
-      labelStyle: { fill: "#a39787", fontSize: 11, fontWeight: 600 },
-    }));
-
-    const dims = new Map<string, { width: number; height: number }>();
-    for (const n of clusterNodes) {
-      dims.set(n.id, { width: LAYER_CLUSTER_WIDTH, height: LAYER_CLUSTER_HEIGHT });
-    }
-
-    return { clusterNodes, flowEdges, dims };
-  }, [graph, nodesById, nodeIdToLayerId, searchResults, drillIntoLayer]);
-
-  const [overview, setOverview] = useState<{ nodes: Node[]; edges: Edge[] }>({
-    nodes: [],
-    edges: [],
-  });
-  const [layoutStatus, setLayoutStatus] = useState<"computing" | "ready">("ready");
-
-  useEffect(() => {
-    if (!built) {
-      setOverview({ nodes: [], edges: [] });
-      setLayoutStatus("ready");
-      return;
-    }
-    let cancelled = false;
-    const { clusterNodes, flowEdges, dims } = built;
-    const baseNodes = clusterNodes as unknown as Node[];
-    const elkInput = nodesToElkInput(baseNodes, flowEdges, dims);
-    setLayoutStatus("computing");
-    applyElkLayout(elkInput, { strict: import.meta.env.DEV })
-      .then(({ positioned, issues }) => {
-        if (cancelled) return;
-        if (issues.length > 0) {
-          // Funnel into store so WarningBanner surfaces them. getState()
-          // avoids re-creating the closure on every layoutIssues change.
-          useDashboardStore.getState().appendLayoutIssues(issues);
-        }
-        const positionedNodes = mergeElkPositions(baseNodes, positioned);
-        setOverview({ nodes: positionedNodes, edges: flowEdges });
-        setLayoutStatus("ready");
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        console.error("[overview ELK] layout failed:", err);
-        setLayoutStatus("ready");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [built]);
-
-  return { ...overview, layoutStatus };
-}
+// Leave room for the breadcrumb and link controls above the tiers.
+const OVERVIEW_FIT_OPTIONS = {
+  minZoom: 0.01,
+  padding: { top: "112px", bottom: "32px", left: "32px", right: "32px" },
+} as const;
+const DETAIL_FIT_OPTIONS = { minZoom: 0.01, padding: 0.1 } as const;
 
 // ── Layer detail level: topology (ELK Stage 1) + visual overlay ─────────
 
@@ -1324,6 +1215,7 @@ function GraphViewInner() {
   const activeLayerId = useDashboardStore((s) => s.activeLayerId);
   const selectNode = useDashboardStore((s) => s.selectNode);
   const drillIntoLayer = useDashboardStore((s) => s.drillIntoLayer);
+  const selectLayer = useDashboardStore((s) => s.selectLayer);
   const focusNodeId = useDashboardStore((s) => s.focusNodeId);
   const setFocusNode = useDashboardStore((s) => s.setFocusNode);
   const setReactFlowInstance = useDashboardStore((s) => s.setReactFlowInstance);
@@ -1335,7 +1227,8 @@ function GraphViewInner() {
   const tourFitPending = useDashboardStore((s) => s.tourFitPending);
   const { preset } = useTheme();
 
-  const overviewGraph = useOverviewGraph();
+  const [hoveredLayerId, setHoveredLayerId] = useState<string | null>(null);
+  const overviewGraph = useOverviewGraph(hoveredLayerId);
   const detailGraph = useLayerDetailGraph();
 
   const {
@@ -1354,7 +1247,7 @@ function GraphViewInner() {
   const { fitView, getViewport, setCenter } = useReactFlow();
 
   useEffect(() => {
-    setNodes(initialNodes);
+    setNodes((current) => carryOverMeasurements(current, initialNodes));
   }, [initialNodes, setNodes]);
 
   useEffect(() => {
@@ -1368,7 +1261,7 @@ function GraphViewInner() {
   const pendingFitRef = useRef(false);
   useEffect(() => {
     pendingFitRef.current = true;
-  }, [navigationLevel, activeLayerId]);
+  }, [navigationLevel, activeLayerId, overviewGraph.layoutKey]);
 
   useEffect(() => {
     if (!pendingFitRef.current) return;
@@ -1376,10 +1269,33 @@ function GraphViewInner() {
     pendingFitRef.current = false;
     // One frame so React Flow has positioned the nodes before fit.
     const raf = requestAnimationFrame(() => {
-      fitView({ duration: 400, padding: 0.2 });
+      fitView(
+        navigationLevel === "overview"
+          ? { ...OVERVIEW_FIT_OPTIONS, duration: 400 }
+          : { duration: 400, padding: 0.2 },
+      );
     });
     return () => cancelAnimationFrame(raf);
-  }, [nodes, fitView]);
+  }, [nodes, fitView, navigationLevel]);
+
+  // The overview is meant to be seen whole: refit when the canvas changes size
+  // (window resize, a warning banner appearing above it, sidebar toggles).
+  const canvasRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = canvasRef.current;
+    if (!el || navigationLevel !== "overview" || typeof ResizeObserver === "undefined") return;
+    let raf = 0;
+    const observer = new ResizeObserver(() => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => fitView(OVERVIEW_FIT_OPTIONS));
+    });
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      cancelAnimationFrame(raf);
+    };
+    // `graph` is a dependency because the canvas div only mounts once it loads.
+  }, [graph, navigationLevel, fitView]);
 
   // Lock viewport onto a container the user just manually expanded so it
   // appears to expand in place rather than getting yanked off-screen by
@@ -1504,7 +1420,8 @@ function GraphViewInner() {
   const onNodeClick = useCallback(
     (_: React.MouseEvent, node: { id: string }) => {
       if (navigationLevel === "overview") {
-        drillIntoLayer(node.id);
+        const selected = useDashboardStore.getState().selectedLayerId;
+        selectLayer(selected === node.id ? null : node.id);
       } else if (node.id.startsWith("portal:")) {
         const targetLayerId = node.id.replace("portal:", "");
         drillIntoLayer(targetLayerId);
@@ -1512,12 +1429,29 @@ function GraphViewInner() {
         selectNode(node.id);
       }
     },
-    [navigationLevel, drillIntoLayer, selectNode],
+    [navigationLevel, drillIntoLayer, selectNode, selectLayer],
   );
+
+  const onNodeDoubleClick = useCallback(
+    (_: React.MouseEvent, node: { id: string }) => {
+      if (navigationLevel === "overview") drillIntoLayer(node.id);
+    },
+    [navigationLevel, drillIntoLayer],
+  );
+
+  const onNodeMouseEnter = useCallback(
+    (_: React.MouseEvent, node: { id: string }) => {
+      if (navigationLevel === "overview") setHoveredLayerId(node.id);
+    },
+    [navigationLevel],
+  );
+
+  const onNodeMouseLeave = useCallback(() => setHoveredLayerId(null), []);
 
   const onPaneClick = useCallback(() => {
     selectNode(null);
-  }, [selectNode]);
+    selectLayer(null);
+  }, [selectNode, selectLayer]);
 
   if (!graph) {
     return (
@@ -1528,8 +1462,9 @@ function GraphViewInner() {
   }
 
   return (
-    <div className="h-full w-full relative">
+    <div ref={canvasRef} className="h-full w-full relative">
       <Breadcrumb />
+      {navigationLevel === "overview" && <OverviewControls />}
       {focusNodeId && navigationLevel === "layer-detail" && (
         <div className="absolute top-14 left-1/2 -translate-x-1/2 z-10">
           <button
@@ -1547,28 +1482,36 @@ function GraphViewInner() {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={onNodeClick}
+        onNodeDoubleClick={onNodeDoubleClick}
+        onNodeMouseEnter={onNodeMouseEnter}
+        onNodeMouseLeave={onNodeMouseLeave}
         onPaneClick={onPaneClick}
+        zoomOnDoubleClick={navigationLevel !== "overview"}
         onMove={navigationLevel === "layer-detail" ? onMove : undefined}
         onInit={setReactFlowInstance}
         nodeTypes={nodeTypes}
+        edgeTypes={edgeTypes}
         nodesDraggable={false}
         nodesConnectable={false}
         edgesFocusable={false}
         edgesReconnectable={false}
         elementsSelectable={false}
         fitView
-        fitViewOptions={{ minZoom: 0.01, padding: 0.1 }}
+        fitViewOptions={navigationLevel === "overview" ? OVERVIEW_FIT_OPTIONS : DETAIL_FIT_OPTIONS}
         minZoom={0.01}
         maxZoom={2}
         colorMode={preset.isDark ? "dark" : "light"}
       >
         <Background variant={BackgroundVariant.Dots} color="var(--color-edge-dot)" gap={20} size={1} />
         <Controls />
-        <MiniMap
-          nodeColor="var(--color-elevated)"
-          maskColor="var(--glass-bg)"
-          className="!bg-surface !border !border-border-subtle"
-        />
+        {/* The overview is a handful of cards: a minimap only covers them. */}
+        {navigationLevel !== "overview" && (
+          <MiniMap
+            nodeColor="var(--color-elevated)"
+            maskColor="var(--glass-bg)"
+            className="!bg-surface !border !border-border-subtle"
+          />
+        )}
         <TourFitView />
         <SelectedNodeFitView />
       </ReactFlow>

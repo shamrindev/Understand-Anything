@@ -8,6 +8,7 @@ import type {
   TourStep,
 } from "@understand-anything/core/types";
 import type { ReactFlowInstance } from "@xyflow/react";
+import { deriveFallbackLayers } from "./utils/layerGraph";
 
 export type Persona = "non-technical" | "junior" | "experienced";
 export type NavigationLevel = "overview" | "layer-detail";
@@ -116,6 +117,12 @@ interface DashboardStore {
   // Lens navigation
   navigationLevel: NavigationLevel;
   activeLayerId: string | null;
+  /** Layer selected on the overview (shown in the sidebar, its links lit up). */
+  selectedLayerId: string | null;
+  /** Edge types the layer overview draws; `null` = the graph's dependency types. */
+  overviewEdgeTypes: Set<string> | null;
+  /** Hide layer links weaker than this; `null` = derived from the graph. */
+  overviewMinStrength: number | null;
 
   codeViewerOpen: boolean;
   codeViewerNodeId: string | null;
@@ -163,6 +170,9 @@ interface DashboardStore {
   goBackNode: () => void;
   drillIntoLayer: (layerId: string) => void;
   navigateToOverview: () => void;
+  selectLayer: (layerId: string | null) => void;
+  setOverviewEdgeTypes: (types: Set<string> | null) => void;
+  setOverviewMinStrength: (value: number | null) => void;
   setFocusNode: (nodeId: string | null) => void;
   setSearchQuery: (query: string) => void;
   setPersona: (persona: Persona) => void;
@@ -300,6 +310,9 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
 
   navigationLevel: "overview",
   activeLayerId: null,
+  selectedLayerId: null,
+  overviewEdgeTypes: null,
+  overviewMinStrength: null,
   codeViewerOpen: false,
   codeViewerNodeId: null,
   codeViewerExpanded: false,
@@ -363,7 +376,13 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       pendingFocusContainer: null,
     })),
 
-  setGraph: (graph) => {
+  setGraph: (loaded) => {
+    // A graph analysed without the architecture step has no layers, which
+    // would leave the overview blank — group its files by folder instead.
+    const graph =
+      loaded.kind !== "knowledge" && (loaded.layers ?? []).length === 0
+        ? { ...loaded, layers: deriveFallbackLayers(loaded) }
+        : loaded;
     const searchEngine = new SearchEngine(graph.nodes);
     const query = get().searchQuery;
     const searchResults = query.trim() ? searchEngine.search(query) : [];
@@ -380,6 +399,9 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       searchResults,
       navigationLevel: "overview",
       activeLayerId: null,
+      selectedLayerId: null,
+      overviewEdgeTypes: null,
+      overviewMinStrength: null,
       selectedNodeId: null,
       focusNodeId: null,
       nodeHistory: [],
@@ -503,9 +525,11 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
     }),
 
   navigateToOverview: () =>
-    set({
+    set((state) => ({
       navigationLevel: "overview",
       activeLayerId: null,
+      // Coming back from a layer keeps it selected, so the user sees where they were.
+      selectedLayerId: state.activeLayerId ?? state.selectedLayerId,
       selectedNodeId: null,
       focusNodeId: null,
       codeViewerOpen: false,
@@ -515,7 +539,12 @@ export const useDashboardStore = create<DashboardStore>()((set, get) => ({
       containerSizeMemory: new Map(),
       expandedContainers: new Set(),
       pendingFocusContainer: null,
-    }),
+    })),
+
+  selectLayer: (layerId) =>
+    set(layerId ? { selectedLayerId: layerId, selectedNodeId: null } : { selectedLayerId: null }),
+  setOverviewEdgeTypes: (types) => set({ overviewEdgeTypes: types }),
+  setOverviewMinStrength: (value) => set({ overviewMinStrength: value }),
 
   setFocusNode: (nodeId) =>
     set({

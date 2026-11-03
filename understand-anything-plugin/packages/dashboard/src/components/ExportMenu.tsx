@@ -3,6 +3,7 @@ import { useDashboardStore } from "../store";
 import { useI18n } from "../contexts/I18nContext";
 import type { KnowledgeGraph } from "@understand-anything/core/types";
 import { filterNodes, filterEdges } from "../utils/filters";
+import { isDerivedLayer } from "../utils/layerGraph";
 
 function escapeXml(s: string): string {
   return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -202,6 +203,8 @@ export default function ExportMenu() {
         ...graph,
         nodes: filteredGraphNodes,
         edges: filteredGraphEdges,
+        // Folder layers are a display aid for layer-less graphs, not data.
+        layers: graph.layers.filter((l) => !isDerivedLayer(l)),
       };
 
       const json = JSON.stringify(filteredGraph, null, 2);

@@ -13,6 +13,7 @@ import FilterPanel from "./components/FilterPanel";
 import ExportMenu from "./components/ExportMenu";
 import PersonaSelector from "./components/PersonaSelector";
 import ProjectOverview from "./components/ProjectOverview";
+import LayerInfo from "./components/LayerInfo";
 import FileExplorer from "./components/FileExplorer";
 import WarningBanner from "./components/WarningBanner";
 import StalenessBanner from "./components/StalenessBanner";
@@ -284,6 +285,8 @@ function DashboardContent({
 }) {
   const graph = useDashboardStore((s) => s.graph);
   const selectedNodeId = useDashboardStore((s) => s.selectedNodeId);
+  const selectedLayerId = useDashboardStore((s) => s.selectedLayerId);
+  const navigationLevel = useDashboardStore((s) => s.navigationLevel);
   const tourActive = useDashboardStore((s) => s.tourActive);
   const persona = useDashboardStore((s) => s.persona);
   const codeViewerOpen = useDashboardStore((s) => s.codeViewerOpen);
@@ -320,8 +323,8 @@ function DashboardContent({
   );
 
   useEffect(() => {
-    if (selectedNodeId) setSidebarTab("info");
-  }, [selectedNodeId]);
+    if (selectedNodeId || selectedLayerId) setSidebarTab("info");
+  }, [selectedNodeId, selectedLayerId]);
 
   // Define keyboard shortcuts
   const shortcuts = useMemo<KeyboardShortcut[]>(
@@ -353,6 +356,8 @@ function DashboardContent({
             state.closeCodeViewer();
           } else if (state.selectedNodeId) {
             state.selectNode(null);
+          } else if (state.navigationLevel === "overview" && state.selectedLayerId) {
+            state.selectLayer(null);
           } else if (state.navigationLevel === "layer-detail") {
             state.navigateToOverview();
           } else if (state.tourActive) {
@@ -445,15 +450,17 @@ function DashboardContent({
   // NodeInfo always takes priority when a node is selected.
   // Learn mode adds LearnPanel below it; otherwise ProjectOverview shows when idle.
   const isLearnMode = tourActive || persona === "junior";
+  const showLayerInfo = !selectedNodeId && navigationLevel === "overview" && !!selectedLayerId;
   const infoSidebarContent = (
     <>
       {selectedNodeId && <NodeInfo />}
+      {showLayerInfo && <LayerInfo />}
       {isLearnMode && (
         <Suspense fallback={null}>
           <LearnPanel />
         </Suspense>
       )}
-      {!selectedNodeId && !isLearnMode && <ProjectOverview />}
+      {!selectedNodeId && !showLayerInfo && !isLearnMode && <ProjectOverview />}
     </>
   );
 
